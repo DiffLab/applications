@@ -1,0 +1,78 @@
+From 5e867564bbb946c643a4b240102df0ee31606caf Mon Sep 17 00:00:00 2001
+From: Jagoda Gorska <juliagoda.pl@protonmail.com>
+Date: Wed, 13 Jan 2021 00:05:52 +0100
+Subject: [PATCH] GitQlient-v1.2.0-QLogger
+
+Signed-off-by: Jagoda Gorska <juliagoda.pl@protonmail.com>
+---
+ QLogger.cpp       |  2 +-
+ QLoggerLevel.h    |  3 ++-
+ QLoggerWriter.cpp | 21 ++++++++++++---------
+ 3 files changed, 15 insertions(+), 11 deletions(-)
+
+diff --git a/QLogger.cpp b/QLogger.cpp
+index a9ba185..4147926 100644
+--- a/QLogger.cpp
++++ b/QLogger.cpp
+@@ -118,7 +118,7 @@ void QLoggerManager::enqueueMessage(const QString &module, LogLevel level, const
+    const auto fileName = file.mid(file.lastIndexOf('/') + 1);
+    const auto logWriter = mModuleDest.value(module);
+ 
+-   if (logWriter && !logWriter->isStop() && logWriter->getLevel() <= level)
++   if (logWriter && !logWriter->isStop() && (logWriter->getLevel() <= level ^ logWriter->getLevel() == QLogger::LogLevel::All))
+    {
+       writeAndDequeueMessages(module);
+ 
+diff --git a/QLoggerLevel.h b/QLoggerLevel.h
+index 46c89a1..0111598 100644
+--- a/QLoggerLevel.h
++++ b/QLoggerLevel.h
+@@ -34,7 +34,8 @@ enum class LogLevel
+    Info,
+    Warning,
+    Error,
+-   Fatal
++   Fatal,
++   All
+ };
+ 
+ }
+diff --git a/QLoggerWriter.cpp b/QLoggerWriter.cpp
+index 4c3962d..2327cc0 100644
+--- a/QLoggerWriter.cpp
++++ b/QLoggerWriter.cpp
+@@ -78,19 +78,22 @@ void QLoggerWriter::write(const QPair<QString, QString> &message)
+ void QLoggerWriter::enqueue(const QDateTime &date, const QString &threadId, const QString &module, LogLevel level,
+                             const QString &fileName, int line, const QString &message)
+ {
+-   QString fileLine;
++  if (mLevel == level || mLevel == QLogger::LogLevel::All)
++  {
++      QString fileLine;
+ 
+-   if (!fileName.isEmpty() && line > 0 && mLevel <= LogLevel::Debug)
+-      fileLine = QString(" {%1:%2}").arg(fileName, QString::number(line));
++      if (!fileName.isEmpty() && line > 0 && mLevel <= LogLevel::Debug)
++         fileLine = QString(" {%1:%2}").arg(fileName, QString::number(line));
+ 
+-   const auto text
+-       = QString("[%1] [%2] [%3] [%4]%5 %6 \n")
+-             .arg(levelToText(level), module, date.toString("dd-MM-yyyy hh:mm:ss.zzz"), threadId, fileLine, message);
++      const auto text
++          = QString("[%1] [%2] [%3] [%4]%5 %6 \n")
++                .arg(levelToText(level), module, date.toString("dd-MM-yyyy hh:mm:ss.zzz"), threadId, fileLine, message);
+ 
+-   QMutexLocker locker(&mutex);
+-   messages.append({ threadId, text });
++      QMutexLocker locker(&mutex);
++      messages.append({ threadId, text });
+ 
+-   mQueueNotEmpty.wakeOne();
++      mQueueNotEmpty.wakeOne();
++  }
+ }
+ 
+ void QLoggerWriter::run()
+-- 
+2.30.0
+

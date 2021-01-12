@@ -1,0 +1,404 @@
+From df590291a7303e60ccb67d941183f2f924be4131 Mon Sep 17 00:00:00 2001
+From: Jagoda Gorska <juliagoda.pl@protonmail.com>
+Date: Wed, 13 Jan 2021 00:04:01 +0100
+Subject: [PATCH] GitQlient-v1.2.0
+
+Signed-off-by: Jagoda Gorska <juliagoda.pl@protonmail.com>
+---
+ GitQlient.pro                                 |  4 -
+ src/QPinnableTabWidget/QPinnableTabWidget.cpp | 84 +++++++++++--------
+ src/big_widgets/GitQlient.cpp                 | 16 ++--
+ src/big_widgets/GitQlientRepo.cpp             |  2 +-
+ src/branches/BranchesWidget.h                 |  1 +
+ src/cache/RevisionsCache.cpp                  | 22 +++--
+ src/cache/RevisionsCache.h                    |  1 +
+ src/commits/FileListWidget.cpp                | 20 ++---
+ src/commits/WipWidget.cpp                     |  3 -
+ src/config/GeneralConfigDlg.cpp               |  2 +-
+ src/git/GitHistory.cpp                        |  4 +-
+ src/git/GitRepoLoader.cpp                     | 36 ++++++--
+ 12 files changed, 121 insertions(+), 74 deletions(-)
+
+diff --git a/GitQlient.pro b/GitQlient.pro
+index 383376b..816bcf1 100644
+--- a/GitQlient.pro
++++ b/GitQlient.pro
+@@ -1,10 +1,6 @@
+ #General stuff
+ CONFIG += qt warn_on c++ 17 c++1z
+ 
+-greaterThan(QT_MINOR_VERSION, 12) {
+-!msvc:QMAKE_CXXFLAGS += -Werror
+-}
+-
+ TARGET = GitQlient
+ QT += widgets core network svg
+ DEFINES += QT_DEPRECATED_WARNINGS
+diff --git a/src/QPinnableTabWidget/QPinnableTabWidget.cpp b/src/QPinnableTabWidget/QPinnableTabWidget.cpp
+index 9aebe53..c5863ca 100644
+--- a/src/QPinnableTabWidget/QPinnableTabWidget.cpp
++++ b/src/QPinnableTabWidget/QPinnableTabWidget.cpp
+@@ -4,6 +4,7 @@
+ #include "RealCloseButton.h"
+ 
+ #include <QMenu>
++#include <QMessageBox>
+ #include <QMouseEvent>
+ #include <QTabBar>
+ #include <QStyle>
+@@ -133,12 +134,17 @@ int QPinnableTabWidget::insertTab(int index, QWidget *widget, const QIcon &icon,
+ 
+ void QPinnableTabWidget::removeTab(int index)
+ {
+-   QTabWidget::removeTab(index);
++    // do this only if index > 0
++    // because we don't want to remove main tab
++    if (index > 0)
++    {
++        QTabWidget::removeTab(index);
+ 
+-   if (mTabState.value(index))
+-      --mLastPinTab;
++        if (mTabState.value(index))
++            --mLastPinTab;
+ 
+-   mTabState.remove(index);
++        mTabState.remove(index);
++    }
+ }
+ 
+ void QPinnableTabWidget::clear()
+@@ -187,7 +193,7 @@ void QPinnableTabWidget::showContextMenu()
+    else
+       connect(actions->addAction("Pin"), &QAction::triggered, this, &QPinnableTabWidget::pintTab);
+ 
+-   connect(actions->addAction("Close"), &QAction::triggered, this, [this]() { removeTab(mClickedTab); });
++   connect(actions->addAction("Close"), &QAction::triggered, this, [this]() { emit tabBar()->tabCloseRequested(mClickedTab); });
+ 
+    actions->exec(QCursor::pos());
+ }
+@@ -211,34 +217,42 @@ void QPinnableTabWidget::pintTab()
+ 
+ void QPinnableTabWidget::unpinTab()
+ {
+-   const auto closeBtn = new RealCloseButton();
+-
+-   tabBar()->setTabButton(
+-       mClickedTab,
+-       static_cast<QTabBar::ButtonPosition>(style()->styleHint(QStyle::SH_TabBar_CloseButtonPosition, 0, this)),
+-       closeBtn);
+-
+-   mTabState.remove(mClickedTab);
+-
+-   mLastPinTab = mTabState.count();
+-
+-   auto deletions = false;
+-
+-   for (auto pair : mTabState.toStdMap())
+-   {
+-      if (pair.first > mClickedTab)
+-      {
+-         mTabState[pair.first - 1] = pair.second;
+-         deletions = true;
+-      }
+-   }
+-
+-   if (deletions)
+-      mTabState.remove(mTabState.lastKey());
+-
+-   tabBar()->moveTab(mClickedTab, mLastPinTab);
+-
+-   connect(closeBtn, &RealCloseButton::clicked, this, [this]() { emit tabBar()->tabCloseRequested(mLastPinTab); });
+-
+-   mClickedTab = -1;
++    // only if this is not main site
++    if (mClickedTab > 0)
++    {
++        // if mClickedTab is 0 or less then we would have a not needed button
++        const auto closeBtn = new RealCloseButton();
++
++        tabBar()->setTabButton(
++                    mClickedTab,
++                    static_cast<QTabBar::ButtonPosition>(style()->styleHint(QStyle::SH_TabBar_CloseButtonPosition, 0, this)),
++                    closeBtn);
++
++        mTabState.remove(mClickedTab);
++
++        mLastPinTab = mTabState.count();
++
++        auto deletions = false;
++
++        for (auto pair : mTabState.toStdMap())
++        {
++            if (pair.first > mClickedTab)
++            {
++                mTabState[pair.first - 1] = pair.second;
++                deletions = true;
++            }
++        }
++
++        if (deletions)
++            mTabState.remove(mTabState.lastKey());
++
++        tabBar()->moveTab(mClickedTab, mLastPinTab);
++
++        connect(closeBtn, &RealCloseButton::clicked, this, [this]() { emit tabBar()->tabCloseRequested(mLastPinTab); });
++        mClickedTab = -1;
++    }
++    else
++    {
++        QMessageBox::information(this, tr("Attempted Unpinning"), tr("Unpinning the first main tab with the main window is not possible."));
++    }
+ }
+diff --git a/src/big_widgets/GitQlient.cpp b/src/big_widgets/GitQlient.cpp
+index 0ec92b3..a906040 100644
+--- a/src/big_widgets/GitQlient.cpp
++++ b/src/big_widgets/GitQlient.cpp
+@@ -226,14 +226,20 @@ void GitQlient::addNewRepoTab(const QString &repoPath, bool pinned)
+ 
+ void GitQlient::closeTab(int tabIndex)
+ {
+-
+    auto repoToRemove = dynamic_cast<GitQlientRepo *>(mRepos->widget(tabIndex));
+ 
+-   QLog_Info("UI", QString("Removing repository {%1}").arg(repoToRemove->currentDir()));
++   if (repoToRemove != nullptr && tabIndex > -1)
++   {
++       QLog_Info("UI", QString("Removing repository {%1}").arg(repoToRemove->currentDir()));
+ 
+-   mCurrentRepos.remove(repoToRemove->currentDir());
+-   mRepos->removeTab(tabIndex);
+-   repoToRemove->close();
++        mCurrentRepos.remove(repoToRemove->currentDir());
++        // mRepos->removeTab(tabIndex);
++        repoToRemove->close();
++   }
++   else
++   {
++       QLog_Warning("UI", QString("Current tab cannot be closed, because it's not a repo. Tab index {%1}").arg(tabIndex));
++   }
+ }
+ 
+ void GitQlient::restorePinnedRepos()
+diff --git a/src/big_widgets/GitQlientRepo.cpp b/src/big_widgets/GitQlientRepo.cpp
+index 70a0aa8..ba1c41a 100644
+--- a/src/big_widgets/GitQlientRepo.cpp
++++ b/src/big_widgets/GitQlientRepo.cpp
+@@ -112,7 +112,7 @@ GitQlientRepo::GitQlientRepo(const QString &repoPath, QWidget *parent)
+ 
+    connect(mHistoryWidget, &HistoryWidget::signalEditFile, this, &GitQlientRepo::signalEditFile);
+    connect(mHistoryWidget, &HistoryWidget::signalAllBranchesActive, mGitLoader.data(), &GitRepoLoader::setShowAll);
+-   connect(mHistoryWidget, &HistoryWidget::signalAllBranchesActive, this, &GitQlientRepo::updateCache);
++   connect(mHistoryWidget, &HistoryWidget::signalAllBranchesActive, this, &GitQlientRepo::updateCache); // TU!
+    connect(mHistoryWidget, &HistoryWidget::signalUpdateCache, this, &GitQlientRepo::updateCache);
+    connect(mHistoryWidget, &HistoryWidget::signalOpenSubmodule, this, &GitQlientRepo::signalOpenSubmodule);
+    connect(mHistoryWidget, &HistoryWidget::signalViewUpdated, this, &GitQlientRepo::updateCache);
+diff --git a/src/branches/BranchesWidget.h b/src/branches/BranchesWidget.h
+index 5c5c221..d038444 100644
+--- a/src/branches/BranchesWidget.h
++++ b/src/branches/BranchesWidget.h
+@@ -122,6 +122,7 @@ public:
+    void forceMinimalView();
+ 
+ private:
++   // TU!
+    QSharedPointer<RevisionsCache> mCache;
+    QSharedPointer<GitBase> mGit;
+    BranchTreeWidget *mLocalBranchesTree = nullptr;
+diff --git a/src/cache/RevisionsCache.cpp b/src/cache/RevisionsCache.cpp
+index 82e6409..7921ba8 100644
+--- a/src/cache/RevisionsCache.cpp
++++ b/src/cache/RevisionsCache.cpp
+@@ -198,20 +198,28 @@ void RevisionsCache::insertCommitInfo(CommitInfo rev, int orderIdx)
+ void RevisionsCache::insertWipRevision(const QString &parentSha, const QString &diffIndex,
+                                        const QString &diffIndexCache)
+ {
+-   QLog_Debug("Git", QString("Updating the WIP commit. The actual parent has SHA {%1}.").arg(parentSha));
++   auto newParentSha = parentSha;
+ 
+-   const auto key = qMakePair(CommitInfo::ZERO_SHA, parentSha);
++   if (parentSha == "-")
++   {
++      newParentSha = "";
++      QLog_Debug("Git", QString("Updating the WIP commit. There are no commits in the repo."));
++   }
++
++   QLog_Debug("Git", QString("Updating the WIP commit. The actual parent has SHA {%1}.").arg(newParentSha));
++
++   const auto key = qMakePair(CommitInfo::ZERO_SHA, newParentSha);
+    const auto fakeRevFile = fakeWorkDirRevFile(diffIndex, diffIndexCache);
+ 
+-   insertRevisionFile(CommitInfo::ZERO_SHA, parentSha, fakeRevFile);
++   insertRevisionFile(CommitInfo::ZERO_SHA, newParentSha, fakeRevFile);
+ 
+    const auto log
+        = fakeRevFile.count() == mUntrackedfiles.count() ? QString("No local changes") : QString("Local changes");
+ 
+    QStringList parents;
+ 
+-   if (!parentSha.isEmpty())
+-      parents.append(parentSha);
++   if (!newParentSha.isEmpty())
++      parents.append(newParentSha);
+ 
+    CommitInfo c(CommitInfo::ZERO_SHA, parents, QString("-"), QDateTime::currentDateTime().toSecsSinceEpoch(), log);
+ 
+@@ -232,8 +240,10 @@ void RevisionsCache::insertWipRevision(const QString &parentSha, const QString &
+ bool RevisionsCache::insertRevisionFile(const QString &sha1, const QString &sha2, const RevisionFiles &file)
+ {
+    const auto key = qMakePair(sha1, sha2);
++   const auto emptyShas = !sha1.isEmpty() && !sha2.isEmpty();
++   const auto isWip = sha1 == CommitInfo::ZERO_SHA;
+ 
+-   if (!sha1.isEmpty() && !sha2.isEmpty() && mRevisionFilesMap.value(key) != file)
++if ((emptyShas || isWip) && mRevisionFilesMap.value(key) != file)
+    {
+       QLog_Debug("Git", QString("Adding the revisions files between {%1} and {%2}.").arg(sha1, sha2));
+ 
+diff --git a/src/cache/RevisionsCache.h b/src/cache/RevisionsCache.h
+index 28ae2b3..53d92a9 100644
+--- a/src/cache/RevisionsCache.h
++++ b/src/cache/RevisionsCache.h
+@@ -49,6 +49,7 @@ class RevisionsCache : public QObject
+    Q_OBJECT
+ 
+ signals:
++    // TU!
+    void signalCacheUpdated();
+ 
+ public:
+diff --git a/src/commits/FileListWidget.cpp b/src/commits/FileListWidget.cpp
+index e13c717..dda18af 100644
+--- a/src/commits/FileListWidget.cpp
++++ b/src/commits/FileListWidget.cpp
+@@ -68,17 +68,17 @@ void FileListWidget::insertFiles(const QString &currentSha, const QString &compa
+    mCurrentSha = currentSha;
+ 
+    if (mCache->containsRevisionFile(mCurrentSha, compareToSha))
+-      files = mCache->getRevisionFile(mCurrentSha, compareToSha);
+-   else if (!compareToSha.isEmpty())
++       files = mCache->getRevisionFile(mCurrentSha, compareToSha);
++   else
+    {
+-      QScopedPointer<GitHistory> git(new GitHistory(mGit));
+-      const auto ret = git->getDiffFiles(mCurrentSha, compareToSha);
+-
+-      if (ret.success)
+-      {
+-         files = mCache->parseDiff(ret.output.toString());
+-         mCache->insertRevisionFile(mCurrentSha, compareToSha, files);
+-      }
++       QScopedPointer<GitHistory> git(new GitHistory(mGit));
++       const auto ret = git->getDiffFiles(mCurrentSha, compareToSha);
++
++       if (ret.success)
++       {
++           files = mCache->parseDiff(ret.output.toString());
++           mCache->insertRevisionFile(mCurrentSha, compareToSha, files);
++       }
+    }
+ 
+    if (files.count() != 0)
+diff --git a/src/commits/WipWidget.cpp b/src/commits/WipWidget.cpp
+index be787fe..cf5a84f 100644
+--- a/src/commits/WipWidget.cpp
++++ b/src/commits/WipWidget.cpp
+@@ -26,9 +26,6 @@ void WipWidget::configure(const QString &sha)
+ {
+    const auto commit = mCache->getCommitInfo(sha);
+ 
+-   if (commit.parentsCount() <= 0)
+-      return;
+-
+    if (!mCache->containsRevisionFile(CommitInfo::ZERO_SHA, commit.parent(0)))
+    {
+       QScopedPointer<GitRepoLoader> git(new GitRepoLoader(mGit, mCache));
+diff --git a/src/config/GeneralConfigDlg.cpp b/src/config/GeneralConfigDlg.cpp
+index 88ffa09..0603ff5 100644
+--- a/src/config/GeneralConfigDlg.cpp
++++ b/src/config/GeneralConfigDlg.cpp
+@@ -33,7 +33,7 @@ GeneralConfigDlg::GeneralConfigDlg(QWidget *parent)
+ 
+    mDisableLogs->setChecked(settings.globalValue("logsDisabled", false).toBool());
+ 
+-   mLevelCombo->addItems({ "Trace", "Debug", "Info", "Warning", "Error", "Fatal" });
++   mLevelCombo->addItems({ "Trace", "Debug", "Info", "Warning", "Error", "Fatal", "All" });
+    mLevelCombo->setCurrentIndex(settings.globalValue("logsLevel", 2).toInt());
+ 
+    const auto currentStyle = settings.globalValue("colorSchema", "dark").toString();
+diff --git a/src/git/GitHistory.cpp b/src/git/GitHistory.cpp
+index 68fa4cd..51e6273 100644
+--- a/src/git/GitHistory.cpp
++++ b/src/git/GitHistory.cpp
+@@ -84,10 +84,12 @@ GitExecResult GitHistory::getDiffFiles(const QString &sha, const QString &diffTo
+ 
+    QLog_Debug("Git", QString("Executing getDiffFiles: {%1} to {%2}").arg(sha, diffToSha));
+ 
+-   QString runCmd = QString("git diff-tree -C --no-color -r -m ");
++   auto runCmd = QString("git diff-tree -C --no-color -r -m ");
+ 
+    if (!diffToSha.isEmpty() && sha != CommitInfo::ZERO_SHA)
+       runCmd.append(diffToSha + " " + sha);
++   else
++      runCmd.append("4b825dc642cb6eb9a060e54bf8d69288fbee4904 " + sha);
+ 
+    return mGitBase->run(runCmd);
+ }
+diff --git a/src/git/GitRepoLoader.cpp b/src/git/GitRepoLoader.cpp
+index 60c72d1..70eaf68 100644
+--- a/src/git/GitRepoLoader.cpp
++++ b/src/git/GitRepoLoader.cpp
+@@ -103,8 +103,18 @@ void GitRepoLoader::loadReferences()
+       {
+          const auto revSha = reference.left(40);
+          const auto refName = reference.mid(41);
++         bool isAnnotated = refName.endsWith("^{}");
++         QString refN = QString();
+ 
+-         if (!refName.startsWith("refs/tags/") || (refName.startsWith("refs/tags/") && refName.endsWith("^{}")))
++         if (isAnnotated) refN = QString(" " + refName);
++         else refN = QString(" " + refName + "^{}");
++
++         QRegExp reg("[a-z0-9]{40}" + QRegExp::escape(refN));
++
++         bool annotatedExists = referencesList.indexOf(reg) != -1;
++
++
++         if (!refName.startsWith("refs/tags/") || (refName.startsWith("refs/tags/") && (isAnnotated ^ !annotatedExists)))
+          {
+             auto localBranches = false;
+             References::Type type;
+@@ -230,13 +240,23 @@ WipRevisionInfo GitRepoLoader::processWip()
+ 
+    if (ret.success)
+    {
+-      const auto parentSha = ret.output.toString().trimmed();
+-
+-      const auto ret3 = mGitBase->run(QString("git diff-index %1").arg(parentSha));
+-      const auto diffIndex = ret3.success ? ret3.output.toString() : QString();
+-
+-      const auto ret4 = mGitBase->run(QString("git diff-index --cached %1").arg(parentSha));
+-      const auto diffIndexCached = ret4.success ? ret4.output.toString() : QString();
++       auto parentSha = ret.output.toString().trimmed();
++       QString diffIndex;
++       QString diffIndexCached;
++
++       if (!parentSha.isEmpty())
++       {
++          const auto ret3 = mGitBase->run(QString("git diff-index %1").arg(parentSha));
++          diffIndex = ret3.success ? ret3.output.toString() : QString();
++          const auto ret4 = mGitBase->run(QString("git diff-index --cached %1").arg(parentSha));
++          diffIndexCached = ret4.success ? ret4.output.toString() : QString();
++       }
++       else
++       {
++          parentSha = "-";
++          diffIndex = "-";
++          diffIndexCached = "-";
++       }
+ 
+       return { parentSha, diffIndex, diffIndexCached };
+    }
+-- 
+2.30.0
+
