@@ -1,0 +1,95 @@
+From b6740c588b044c9fd7827f1bad709952d9cfcbb3 Mon Sep 17 00:00:00 2001
+From: Jagoda Gorska <juliagoda.pl@protonmail.com>
+Date: Thu, 21 Jan 2021 21:44:32 +0100
+Subject: [PATCH] Patch for 3.0.1
+
+Signed-off-by: Jagoda Gorska <juliagoda.pl@protonmail.com>
+---
+ src/inputdaemon.cpp          | 5 -----
+ src/joybutton.cpp            | 4 ++--
+ src/joybuttoncontextmenu.cpp | 4 ++--
+ src/setnamesdialog.cpp       | 7 ++++---
+ 6 files changed, 9 insertions(+), 14 deletions(-)
+
+diff --git a/src/inputdaemon.cpp b/src/inputdaemon.cpp
+index 31a45e08..3781be4a 100755
+--- a/src/inputdaemon.cpp
++++ b/src/inputdaemon.cpp
+@@ -319,11 +319,6 @@ void InputDaemon::deleteJoysticks()
+     {
+         InputDevice *joystick = iter.next().value();
+ 
+-        for (auto el : joystick->getJoystick_sets().values())
+-        {
+-
+-        }
+-
+         if (joystick != nullptr)
+         {
+             delete joystick;
+diff --git a/src/joybutton.cpp b/src/joybutton.cpp
+index af79e3d2..e9ce9884 100755
+--- a/src/joybutton.cpp
++++ b/src/joybutton.cpp
+@@ -139,7 +139,7 @@ JoyButton::~JoyButton()
+    // threadPool->clear();
+ 
+     reset();
+-    //resetPrivVars();
++   // resetPrivVars();
+ }
+ 
+ void JoyButton::queuePendingEvent(bool pressed, bool ignoresets)
+@@ -4504,7 +4504,7 @@ void JoyButton::disconnectPropertyUpdatedConnections()
+ {
+     qInstallMessageHandler(MessageHandler::myMessageOutput);
+ 
+-    disconnect(this, &JoyButton::slotsChanged, nullptr, nullptr);
++    disconnect(this, &JoyButton::slotsChanged, m_parentSet->getInputDevice(), &InputDevice::profileEdited);
+     disconnect(this, &JoyButton::propertyUpdated, m_parentSet->getInputDevice(), &InputDevice::profileEdited);
+ }
+ 
+diff --git a/src/joybuttoncontextmenu.cpp b/src/joybuttoncontextmenu.cpp
+index facf0f75..306bf0ab 100755
+--- a/src/joybuttoncontextmenu.cpp
++++ b/src/joybuttoncontextmenu.cpp
+@@ -53,7 +53,7 @@ void JoyButtonContextMenu::buildMenu()
+     action = this->addAction(tr("Turbo"));
+     action->setCheckable(true);
+     action->setChecked(button->isUsingTurbo());
+-    connect(action, &QAction::triggered, this, &JoyButtonContextMenu::switchToggle);
++    connect(action, &QAction::triggered, this, &JoyButtonContextMenu::switchTurbo);
+ 
+     this->addSeparator();
+ 
+@@ -134,7 +134,7 @@ void JoyButtonContextMenu::switchTurbo()
+     qInstallMessageHandler(MessageHandler::myMessageOutput);
+ 
+     PadderCommon::inputDaemonMutex.lock();
+-    button->setToggle(!button->isUsingTurbo());
++    button->setUseTurbo(!button->isUsingTurbo());
+     PadderCommon::inputDaemonMutex.unlock();
+ }
+ 
+diff --git a/src/setnamesdialog.cpp b/src/setnamesdialog.cpp
+index 29f0b6b4..52487801 100755
+--- a/src/setnamesdialog.cpp
++++ b/src/setnamesdialog.cpp
+@@ -39,10 +39,11 @@ SetNamesDialog::SetNamesDialog(InputDevice *device, QWidget *parent) :
+     this->device = device;
+ 
+     QList<SetJoystick*> joysList = device->getJoystick_sets().values();
+-    for (QList<SetJoystick*>::iterator currSetJoy = joysList.begin(); currSetJoy != joysList.end(); currSetJoy++)
++
++    for (int i = 0; i < joysList.size(); i++)
+     {
+-        int i = currSetJoy - joysList.begin();
+-        ui->setNamesTableWidget->setItem(i, 0, new QTableWidgetItem((*currSetJoy)->getName()));
++        auto name = joysList[i]->getName();
++        ui->setNamesTableWidget->setItem(i, 0, new QTableWidgetItem(name));
+     }
+ 
+     connect(this, &SetNamesDialog::accepted, this, &SetNamesDialog::saveSetNameChanges);
+-- 
+2.30.0
+
